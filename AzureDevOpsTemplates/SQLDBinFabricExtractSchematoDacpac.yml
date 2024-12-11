@@ -1,0 +1,102 @@
+# This is a pipeline to creates a dacpac based on the contents of a Microsoft Fabric Data Warehouse Database Project
+# From there it deploys the dacpac file to another Microsoft Fabric Data Warehouse
+
+# Please note that you need the below variables created for this to work
+# I recommend doing this by creating at least one variable group
+#   agentpool - The name of the agent pool you want to use (ideally a self-hosted one with latest sqlpackage installed)
+#     Otherwise you must put additional logic in this pipeline to deploy latest version of sqlpackage onto the agent
+#   SourceConnString - Configuration string for source SQL database in Fabric
+#   SQLDBartifactname - A name for the created artifact
+#   AzureSubscription - A reference to an Azure subscription is required for the task to work, can be any one as will not be used
+#   DestConnString - The connection string for the SQL database in Fabric (including credentials, as per the post)
+#   DestinationDB - The name of the SQL database in Fabric
+#   Targetfile - Name of the dacpac file created (default is dame name as .sqlproj file, in this case FabricDWproject.dacpac)
+
+
+# This pipeline uses the variable group: SQLDBinFabric
+# Feel free to create youw own ones and use them below
+variables:
+- group: SQLDBinFabric
+
+# Trigger is currently none, can also specify a branch name here
+trigger: none
+# - main
+
+# In this pipeline I use a Microsoft-hosted agent
+# To reference a self-hosted agent instead swap around the commented and uncommented references
+pool:
+  vmImage: 'windows-latest'
+  # name: $(agentpool)
+
+stages:
+
+- stage: ExtractSchema
+  displayName: 'Extract schema to create dacpac'
+
+  jobs:
+    - job: 'ExtractSchema'
+      displayName: 'Extract schema to create dacpac'
+      
+      # Optional - you can specify a pool just for this task
+      # pool:
+      #   vmImage: 'windows-latest'
+
+      steps:
+      # Install updated version of SqlPackage
+      - powershell: 'dotnet tool update -g microsoft.sqlpackage'
+        displayName: 'Install SqlPackage'
+
+      # Extract schema from existing database into a dacpac file  
+      - task: PowerShell@2
+        inputs:
+          targetType: 'inline'
+          script: 'SqlPackage /Action:Extract /TargetFile:"$(Build.ArtifactStagingDirectory)\SQLDBinFabric.dacpac" /SourceConnectionString:"$(SourceConnString)"'
+
+      # Publish dacpac
+      - task: PublishBuildArtifacts@1
+        displayName: 'Publish Artifact'
+        inputs:
+          PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+          ArtifactName: '$(SQLDBartifactname)'
+
+# Now lets deploy the dacpac to a SQL database in Fabric
+# Note that doing this using a deployment job so can state environment
+- stage: SQLDBinFabric
+  displayName: 'Deploy dacpac to SQL DB in Fabric'
+  jobs:
+    - deployment: 'SQLDBinFabric'
+      displayName: 'SQL DB in Fabric'
+      environment: Production
+
+      # Just to raise awareness that you can select pools at different stages
+      # pool: 
+      #   vmImage: 'windows-latest'
+
+      strategy:
+        runOnce:
+          deploy:
+            steps:                 
+                 #First task to install SqlPackage is optional, but useful to future-proof deployments
+                  - task: PowerShell@2
+                    displayName: 'Install Sqlpackage'
+                    inputs:
+                      targetType: 'inline'
+                      script: 'dotnet tool install --global Microsoft.SqlPackage'
+
+                  - task: DownloadBuildArtifacts@0
+                    displayName: 'Dowload Artifact'
+                    inputs:
+                      buildType: 'current'
+                      downloadType: 'specific'
+                      artifactName:  '$(SQLDBartifactname)'
+                      downloadPath: '$(System.ArtifactsDirectory)'
+
+                  - task: SqlAzureDacpacDeployment@1
+                    displayName: 'Install DACPAC on SQL DB in Fabric'
+                    inputs:
+                      azureSubscription: $(AzureSubscription)
+                      AuthenticationType: connectionString
+                      ConnectionString: $(DestConnString)
+                      DatabaseName: '$(DestinationDB)'
+                      DacpacFile: '$(System.ArtifactsDirectory)\$(SQLDBartifactname)\$(Targetfile)'
+                      AdditionalArguments: '/p:AllowIncompatiblePlatform=True'

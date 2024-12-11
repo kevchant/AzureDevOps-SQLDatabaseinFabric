@@ -1,0 +1,99 @@
+# This is a pipeline to creates a dacpac based on the contents of a Microsoft Fabric Data Warehouse Database Project
+# From there it deploys the dacpac file to another Microsoft Fabric Data Warehouse
+
+# Please note that you need the below variables created for this to work
+# I recommend doing this by creating at least one variable group
+#   BuildConfiguration - Configuration for build (Dev, Test, Release, etc)
+#   SQLDBartifactname - A name for the created artifact
+#   AzureSubscription - A reference to an Azure subscription is required for the task to work, can be any one as will not be used
+#   DestSQLConnString - The connection string for the destination SQL Database in Fabric (including the credentials, as per the post)
+#   DestinationDB - The name of the SQL Database in Fabric
+#   Targetfile - Name of the dacpac file created (default is dame name as .sqlproj file, in this case FabricDWproject.dacpac)
+#   OPTIONAL:
+#   agentpool - The name of the agent pool you want to use (ideally a self-hosted pool with latest sqlpackage installed)
+
+
+
+# This pipeline uses the variable group: SQLDBinFabric
+# Feel free to create youw own ones and use them below
+variables:
+- group: SQLDBinFabric
+
+# Trigger is currently none, can also specify a branch name here
+trigger: none
+# - main
+
+# In this pipeline I use a Microsoft-hosted agent
+# To reference a self-hosted agent instead swap around the commented and uncommented references
+pool:
+  vmImage: 'windows-latest'
+  # name: $(agentpool)
+
+stages:
+
+- stage: SQLDBdacpac
+  displayName: 'Build SQLDB dacpac'
+
+  jobs:
+    - job: 'Builddacpac'
+      displayName: 'Build SQL DB in Fabric dacpac'
+      
+      # Optional - you can specify a pool just for this task
+      # pool:
+      #   vmImage: 'windows-latest'
+
+      steps:
+
+      # Build the project using a .NET task
+      - task: DotNetCoreCLI@2
+        displayName: 'Build the dacpac using dotnet'
+        inputs:
+          command: 'build'
+          projects: 'SQLDBinFabric.sqlproj'
+          arguments: '--configuration $(BuildConfiguration)'
+      
+      #Then publish it as part of artifact
+      - task: PublishBuildArtifacts@1
+        displayName: 'Publishes dacpac as an artifact'
+        # Publishes the dacpac as part of an artifact within Azure DevOps
+        inputs:
+          PathtoPublish: 'bin/$(BuildConfiguration)'
+          ArtifactName: $(SQLDBartifactname)
+          publishLocation: 'Container'
+
+# Now lets deploy the dacpac to a SQL database in Fabric
+# Note that doing this using a deployment job so can state environment
+- stage: SQLDBinFabric
+  displayName: 'Deploy dacpac to SQL DB in Fabric'
+  jobs:
+    - deployment: 'SQLDBinFabric'
+      displayName: 'SQL DB in Fabric'
+      environment: Production
+
+      # Just to raise awareness that you can select pools at different stages
+      # pool: 
+      #   vmImage: 'windows-latest'
+
+      strategy:
+        runOnce:
+          deploy:
+            steps:                 
+                  - task: DownloadBuildArtifacts@0
+                    displayName: 'Dowload Artifact'
+                    inputs:
+                      buildType: 'current'
+                      downloadType: 'specific'
+                      artifactName:  '$(SQLDBartifactname)'
+                      downloadPath: '$(System.ArtifactsDirectory)'
+
+                  - task: SqlAzureDacpacDeployment@1
+                    displayName: 'Install DACPAC on SQL DB in Fabric'
+                    inputs:
+                      azureSubscription: $(AzureSubscription)
+                      AuthenticationType: connectionString
+                      ConnectionString: $(DestConnString)
+                      DatabaseName: '$(DestinationDB)'
+                      DacpacFile: '$(System.ArtifactsDirectory)\$(SQLDBartifactname)\$(Targetfile)'
+                      AdditionalArguments: '/p:AllowIncompatiblePlatform=True'
+
+                  
