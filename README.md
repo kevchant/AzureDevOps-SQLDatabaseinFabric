@@ -2,7 +2,7 @@
 
 Contains a template that you can use to perform CI/CD for SQL database in Fabric in two different ways. Based on a blog post I wrote called '[Two ways to perform CI/CD for SQL databases in Fabric using YAML Pipelines](https://www.kevinrchant.com/?p=12321)'.
 
-A brief is below. However, there is also a [wiki for this project](https://github.com/kevchant/AzDo-SQLDatabaseinFabric/wiki) that covers multiple topics.
+A brief is below. However, there is also a [wiki for this project](https://github.com/kevchant/AzureDevOps-SQLDatabaseinFabric/wiki) that covers multiple topics.
 
 Both methods use a YAML pipeline, which you can find in the AzureDevOpsTemplates folder.
 
